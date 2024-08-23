@@ -21,7 +21,15 @@ func main() {
 	defer CloseDB()
 
 	r := mux.NewRouter()
+
+	// Public Routes
 	r.HandleFunc("/", HomeHandler)
+	r.HandleFunc("/login", LoginHandler).Methods("POST")
+
+	// Protected Routes
+	api := r.PathPrefix("/api").Subrouter()
+	api.Use(JWTMiddleware)
+	api.HandleFunc("/hello", HelloHandler).Methods("GET")
 
 	srv := &http.Server{
 		Addr:         "0.0.0.0:8080",
@@ -52,4 +60,22 @@ func main() {
 
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, World!")
+}
+
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	username := "exampleUser"
+
+	token, err := GenerateJWT(username)
+	if err != nil {
+		http.Error(w, "Could not generate token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(fmt.Sprintf(`{"token": "%s"}`, token)))
+}
+
+func HelloHandler(w http.ResponseWriter, r *http.Request) {
+	username := r.Context().Value(userContextKey).(string)
+	w.Write([]byte(fmt.Sprintf("Hello, %s!", username)))
 }
