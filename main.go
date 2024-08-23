@@ -51,6 +51,5 @@ func main() {
 }
 
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("My chungus is here")
 	fmt.Fprintf(w, "Hello, World!")
 }
