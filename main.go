@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/gorilla/mux"
@@ -25,6 +29,7 @@ func main() {
 	// Public Routes
 	r.HandleFunc("/", HomeHandler)
 	r.HandleFunc("/login", LoginHandler).Methods("POST")
+	r.HandleFunc("/register", RegisterHandler).Methods("POST")
 
 	// Protected Routes
 	api := r.PathPrefix("/api").Subrouter()
@@ -58,21 +63,72 @@ func main() {
 	os.Exit(0)
 }
 
+func RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	var user struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	hashedPassword := hashPassword(user.Password)
+
+	_, err = DB.Exec(`INSERT INTO users (username, password_hash, email) VALUES ($1, $2, $3)`,
+		user.Username, hashedPassword, user.Email)
+	if err != nil {
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte("User created successfully"))
+
+}
+
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, World!")
 }
 
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
-	username := "exampleUser"
+func hashPassword(password string) string {
+	hash := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(hash[:])
+}
 
-	token, err := GenerateJWT(username)
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var user struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	var storedHash string
+	err = DB.QueryRow(`SELECT password_hash FROM users WHERE username = $1`, user.Username).Scan(&storedHash)
+	if err == sql.ErrNoRows || hashPassword(user.Password) != storedHash {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		return
+	} else if err != nil {
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		return
+	}
+
+	token, err := GenerateJWT(user.Username)
 	if err != nil {
 		http.Error(w, "Could not generate token", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"token": "%s"}`, token)))
+	w.Write([]byte(fmt.Sprintf(`{"token":"%s"}`, token)))
 }
 
 func HelloHandler(w http.ResponseWriter, r *http.Request) {
