@@ -30,6 +30,7 @@ func main() {
 	r.HandleFunc("/", HomeHandler)
 	r.HandleFunc("/login", LoginHandler).Methods("POST")
 	r.HandleFunc("/register", RegisterHandler).Methods("POST")
+	r.HandleFunc("/refresh-token", RefreshTokenHandler).Methods("POST")
 
 	// Protected Routes
 	api := r.PathPrefix("/api").Subrouter()
@@ -121,17 +122,69 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := GenerateJWT(user.Username)
+	token, refreshToken, err := GenerateJWT(user.Username)
 	if err != nil {
 		http.Error(w, "Could not generate token", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"token":"%s"}`, token)))
+	w.Write([]byte(fmt.Sprintf(`{"token":"%s", "refresh": "%s"}`, token, refreshToken)))
 }
 
 func HelloHandler(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(userContextKey).(string)
 	w.Write([]byte(fmt.Sprintf("Hello, %s!", username)))
+}
+
+func RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	// Extract the username associated with the refresh token
+	username, err := getUsernameFromRefreshToken(request.RefreshToken)
+	if err != nil || username == "" {
+		http.Error(w, "Invalid refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	// Validate the refresh token
+	ctx := r.Context()
+	isValid, err := validateRefreshToken(ctx, username, request.RefreshToken)
+	if err != nil || !isValid {
+		http.Error(w, "Invalid or expired refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	// Generate a new JWT token
+	newToken, _, err := GenerateJWT(username)
+	if err != nil {
+		http.Error(w, "Could not generate new token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(fmt.Sprintf(`{"token":"%s"}`, newToken)))
+}
+
+// getUsernameFromRefreshToken retrieves the username associated with the refresh token
+func getUsernameFromRefreshToken(refreshToken string) (string, error) {
+	var username string
+	err := DB.QueryRow(`
+		SELECT u.username FROM users u 
+		JOIN refresh_tokens rt ON rt.user_id = u.id 
+		WHERE rt.token = $1 AND rt.revoked = FALSE 
+		AND rt.expires_at > CURRENT_TIMESTAMP
+	`, refreshToken).Scan(&username)
+	if err != nil {
+		return "", err
+	}
+	return username, nil
 }
